@@ -33,7 +33,7 @@ impl<'a> AudioShell<'a> {
         let output_device = run_output_device(params, move |data| {
             let mut samples_left = vec![0.0; block_size];
             let mut samples_right = vec![0.0; block_size];
-            generator.lock().unwrap().process(&mut samples_left, &mut samples_right);
+            generator.lock().unwrap().output_sound(&mut samples_left, &mut samples_right);
 
             for (frame_no, samples) in data.chunks_mut(params.channels_count).enumerate() {
                 samples[0] = samples_left[frame_no];
@@ -56,7 +56,7 @@ pub trait AudioGenerator {
     /// Generates a block of samples.
     /// `samples_left` and `samples_right` are buffers of the block size passed to the shell `run`
     /// function. They are initialized to `0.0` and must be filled with sample data.
-    fn process(&mut self, samples_left: &mut [f32], samples_right: &mut [f32]);
+    fn output_sound(&mut self, samples_left: &mut [f32], samples_right: &mut [f32]);
 
     /// Processes keyboard input.
     fn process_events(&mut self, _event: Event) {}
