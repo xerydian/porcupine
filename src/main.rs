@@ -1,4 +1,4 @@
-// Reference: https://github.com/sourcebox/mi-plaits-dsp-rs/blob/firmware-1.2/examples/midi_control.rs
+// Reference: https://github.com/sourcebox/mi-plaits-dsp-rs/blob/firmware-1.2/examples/midi control.rs
 // Reference: https://github.com/Narsil/rdev/blob/main/examples/listen.rs
 
 use lazy_static::lazy_static;
@@ -35,6 +35,7 @@ struct App<'a> {
     volume: f32,
     balance: f32,
     pressed_set: LinkedHashSet<Key>,
+    transpose: f32,
 }
 
 impl<'a> App<'a> {
@@ -45,6 +46,7 @@ impl<'a> App<'a> {
             modulations: Modulations::default(),
             volume: 1.0,
             balance: 0.0,
+            transpose: 48.0,
             pressed_set: LinkedHashSet::default(),
         }
     }
@@ -59,14 +61,15 @@ fn get_callback(audio_generator: Arc<Mutex<impl AudioGenerator>>) -> impl FnMut(
 
 impl<'a> AudioGenerator for App<'a> {
     fn init(&mut self, _block_size: usize) {
-        self.patch.engine = 0;
+        self.patch.engine = 8;
         self.patch.harmonics = 0.5;
         self.patch.timbre = 0.5;
         self.patch.morph = 0.5;
+        self.patch.lpg_colour = 1.0;
         self.modulations.trigger_patched = true;
         self.modulations.level_patched = true;
         self.voice.init();
-        self.debug_sound();
+        self.print_info();
     }
 
     fn process(&mut self, samples_left: &mut [f32], samples_right: &mut [f32]) {
@@ -88,7 +91,7 @@ impl<'a> AudioGenerator for App<'a> {
     fn process_events(&mut self, event: Event) {
         match event.event_type {
             KeyPress(key) if notes.contains_key(&key) => {
-                self.patch.note = *notes.get(&key).unwrap();
+                self.patch.note = *notes.get(&key).unwrap() + self.transpose;
                 self.modulations.trigger = 1.0;
                 self.modulations.level = 1.0;
                 self.pressed_set.insert(key);
@@ -101,7 +104,7 @@ impl<'a> AudioGenerator for App<'a> {
                     self.modulations.level = 0.0;
                 } 
                 else {
-                    self.patch.note = *notes.get(self.pressed_set.back().unwrap()).unwrap();
+                    self.patch.note = *notes.get(self.pressed_set.back().unwrap()).unwrap() + self.transpose;
                 }
             }
             KeyPress(Key::Escape) => std::process::exit(0),
@@ -146,20 +149,23 @@ impl<'a> AudioGenerator for App<'a> {
                 self.patch.decay = (self.patch.decay + 0.1).min(1.);
             }
             
-            // LPG
-            KeyPress(Key::F11) => { 
-                self.patch.lpg_colour = (self.patch.lpg_colour - 0.1).max(0.);
+            // Decay
+            KeyPress(Key::Dot) => { 
+                self.transpose  -= 12.;
+                self.patch.note -= 12.;
             }
-            KeyPress(Key::F12) => { 
-                self.patch.lpg_colour = (self.patch.lpg_colour + 0.1).min(0.);
+            KeyPress(Key::Minus) => { 
+                self.transpose  += 12.;
+                self.patch.note += 12.;
             }
-            /* (self.balance, self.volume) */
+
+            // Not implemented: self.balance, self.volume, self.patch.lpg_colour
             _ => {}
         }
         // debug
         match event.event_type {
-            KeyPress(Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 | Key::F11 | Key::F12) => {
-                self.debug_sound();
+            KeyPress(Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10) => {
+                self.print_info();
             }
             _ => ()
         }
@@ -167,14 +173,19 @@ impl<'a> AudioGenerator for App<'a> {
 }
 
 impl<'a> App<'a> {
-    fn debug_sound (&self) {
+    fn print_info (&self) {
         clearscreen::clear().unwrap();
-        println!("[ F1-F2 ] Model: {}", self.patch.engine);
+        println!("[ F1-F2 ]    Model: {}", ENGINE_DESCRIPIONS[self.patch.engine]);
         println!("[ F3-F4 ] Harmonic: {}", (10. * self.patch.harmonics).round() / 10.);
-        println!("[ F5-F6 ] Timbre: {}", (10. * self.patch.timbre).round() / 10.);
-        println!("[ F7-F8 ] Morph: {}", (10. * self.patch.morph).round() / 10.);
-        println!("[ F9-F10] Decay {}", (10. * self.patch.decay).round() / 10.);
-        println!("[F11-F12] Filter {}", (10. * self.patch.lpg_colour).round() / 10.);
+        println!("[ F5-F6 ]   Timbre: {}", (10. * self.patch.timbre).round() / 10.);
+        println!("[ F7-F8 ]    Morph: {}", (10. * self.patch.morph).round() / 10.);
+        println!("[ F9-10 ]    Decay: {}", (10. * self.patch.decay).round() / 10.);
+        println!("+-----------------------------------------------------------------+    Octave  ");
+        println!("|    s   d   f   g   h   j   k       3   4   5   6   7   8   9    |  +--------+");
+        println!("|  z   x   c   v   b   n   m   ,   w   e   r   t   y   u   i   o  |  |  .  -  |");
+        println!("+-----------------------------------------------------------------+  +--------+");
+        println!("");
+        println!("(Press [Esc] to exit)");
     }
 }
 
@@ -185,7 +196,34 @@ lazy_static! {
         (Key::KeyS,01.), (Key::KeyD,04.), (Key::KeyF,07.), (Key::KeyG,10.), (Key::KeyH,13.), (Key::KeyJ,16.), (Key::KeyK,19.),
         (Key::KeyZ,00.), (Key::KeyX,03.), (Key::KeyC,06.), (Key::KeyV,09.), (Key::KeyB,12.), (Key::KeyN,15.), (Key::KeyM,18.), (Key::Comma,21.), 
     ].into_iter()
-        .map(|(a, b)| (a, 60.0+(12.0*b/22.0)))
+        .map(|(a, b)| (a, 12.0*b/22.0))
         .collect::<Vec<(Key, f32)>>()).unwrap()
     );
 }
+
+const ENGINE_DESCRIPIONS: [&str; 24] = [
+    "Virtual analog VCF (01)",
+    "Phase distortion (02)",
+    "6-OP A (03)",
+    "6-OP B (04)",
+    "6-OP C (05)",
+    "Waveterrain (06)",
+    "String machine (07)",
+    "Chiptune (08)",
+    "Virtual analog (09)",
+    "Waveshaping (10)",
+    "Fm (11)",
+    "Grain (12)",
+    "Additive (13)",
+    "Wavetable (14)",
+    "Chord (15)",
+    "Speech (16)",
+    "Swarm (17)",
+    "Noise (18)",
+    "Particle (19)",
+    "String (20)",
+    "Modal (21)",
+    "Bass drum (22)",
+    "Snare drum (23)",
+    "Hi-hat (24)",
+];
