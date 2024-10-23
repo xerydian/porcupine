@@ -1,7 +1,6 @@
 use crate::audio_shell::AudioGenerator;
 use mi_plaits_dsp::dsp::voice::{Modulations, Patch, Voice};
 
-use std::f32::consts::PI;
 use std::{cmp, vec};
 use std::collections::HashMap;
 use linked_hash_set::LinkedHashSet;
@@ -16,12 +15,27 @@ use rdev::EventType::{KeyPress, KeyRelease};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SeqStatus {
-    Rec, Play, Stop
+    Rec, Clr, Play, Stop
 }
 
-const BEND_NEGATIVE: f32 = -1.818181818181818;
+#[derive(Default, Clone, Copy)]
+pub struct SeqStep {
+    note: Option<f32>,
+    model: Option<usize>,
+    harmonic: Option<f32>,
+    timbre: Option<f32>,
+    morph: Option<f32>,
+    gate_length: Option<f64>,
+    is_awaiting_note: bool
+}
+
+pub enum SeqStepParam  {
+    Note, Rest, Model, Harmonic, Timbre, Morph, GateLength
+}
+
 const BEND_NEUTRAL : f32 = 0.;
-const BEND_POSITIVE: f32 = 1.818181818181818;
+const BEND_POSITIVE: f32 = 4./22. * 12.;
+const BEND_NEGATIVE: f32 = -4./22. * 12.;
 
 const BEND_SMOOTH_FACTOR:     f32 = 0.000_01;
 const BEND_SMOOTH_FACTOR_INV: f32 = 1. - BEND_SMOOTH_FACTOR;
@@ -29,10 +43,11 @@ const VIBRATO_PRESS_SMOOTH_FACTOR:       f32 = 0.000_002;
 const VIBRATO_PRESS_SMOOTH_FACTOR_INV:   f32 = 1. - VIBRATO_PRESS_SMOOTH_FACTOR;
 const VIBRATO_RELEASE_SMOOTH_FACTOR:     f32 = 0.001;
 const VIBRATO_RELEASE_SMOOTH_FACTOR_INV: f32 = 1. - VIBRATO_RELEASE_SMOOTH_FACTOR;
-const PARAM_SMOOTH_FACTOR:     f32 = 0.1;
+const PARAM_SMOOTH_FACTOR:     f32 = 0.001;
 const PARAM_SMOOTH_FACTOR_INV: f32 = 1. - PARAM_SMOOTH_FACTOR;
 
 const VIBRATO_DEPTH: f32 = 0.6;
+const VIBRATO_RATE: f32 = std::f32::consts::PI * 10.;
 
 pub struct Synth<'a> {
 
@@ -46,15 +61,16 @@ pub struct Synth<'a> {
     // balance: f32,
     note: f32,
     transpose: f32,
-    info_octave: i32,
+    rec_transpose: f32,
+    info_octave: i16,
 
-    target_harmonic: f32, target_timbre: f32, target_morph:f32, target_bend: f32, target_vibrato: f32,
-    smooth_harmonic: f32, smooth_timbre: f32, smooth_morph:f32, smooth_bend: f32, smooth_vibrato: f32,
+    target_harmonic: f32, target_timbre: f32, target_morph:f32, target_bend: f32, target_vibrato_amount: f32,
+    smooth_harmonic: f32, smooth_timbre: f32, smooth_morph:f32, smooth_bend: f32, smooth_vibrato_amount: f32,
 
     pub tempo: f64,
     pub gate_length: f64,
     pressed_set: LinkedHashSet<Key>,
-    pub seq_notes: Vec<f32>,
+    pub seq_notes: Vec<SeqStep>,
     pub seq_status: SeqStatus,
 }
 
@@ -71,10 +87,11 @@ impl<'a> Synth<'a> {
             // balance: 0.0,
             note: 48.0,
             transpose: 48.0,
+            rec_transpose: 0.,
             info_octave: 5,
 
-            target_harmonic: 0.5, target_timbre: 0.5, target_morph:0.5, target_bend: BEND_NEUTRAL, target_vibrato: 0.,
-            smooth_harmonic: 0.5, smooth_timbre: 0.5, smooth_morph:0.5, smooth_bend: BEND_NEUTRAL, smooth_vibrato: 0.,
+            target_harmonic: 0.5, target_timbre: 0.5, target_morph:0.5, target_bend: BEND_NEUTRAL, target_vibrato_amount: 0.,
+            smooth_harmonic: 0.5, smooth_timbre: 0.5, smooth_morph:0.5, smooth_bend: BEND_NEUTRAL, smooth_vibrato_amount: 0.,
 
             tempo: 120.,
             gate_length: 0.5,
@@ -91,20 +108,45 @@ impl<'a> Synth<'a> {
         println!("[ F5-F6 ]   Timbre: {}", (10. * self.target_timbre).round() / 10.);
         println!("[ F7-F8 ]    Morph: {}", (10. * self.target_morph).round() / 10.);
         println!("[ F9-10 ]    Decay: {}", (10. * self.patch.decay).round() / 10.);
-        println!("                          [ '? Rec ] [ ¡¿ {:?} ] [ Up/Down: Tempo ]", 
+        println!("   [ Backspace: Remove last step] [ 0 Rest ] [ '? {:?} ] [ ¡¿ {:?} ]", 
+            if self.seq_status != SeqStatus::Rec {SeqStatus::Rec} else {SeqStatus::Clr},
             if self.seq_status != SeqStatus::Play {SeqStatus::Play} else {SeqStatus::Stop}
         );
-        println!("+-----------------------------------------------------------------+    Octave  ");
-        println!("|    s   d   f   g   h   j   k       3   4   5   6   7   8   9    |  +--------+");
-        println!("|  z   x   c   v   b   n   m   ,   w   e   r   t   y   u   i   o  |  |  .  -  |");
-        println!("+-----------------------------------------------------------------+  +--------+");
-        println!("[ LSHIFT  > ] Pitch Bend   [ LCTRL ] Vibrato ");
-        println!("");
-        println!("Octave: {}", self.info_octave);
-        println!("Sequencer: {:?}", self.seq_status);
-        println!("Tempo: {} BPM", self.tempo.round());
-        println!("");
+        println!("+-----------------------------------------------------------------+");
+        println!("|    s   d   f   g   h   j   k       3   4   5   6   7   8   9    |");
+        println!("|  z   x   c   v   b   n   m   ,   w   e   r   t   y   u   i   o  |");
+        println!("+-----------------------------------------------------------------+");
+        println!("[ LSHIFT  > ] Pitch Bend    [ LCTRL ] Vibrato   [ . - ]  Octave: {} ", self.info_octave);
+        self.print_sequence();
+        println!("                 Transport: {:?}", self.seq_status);
+        println!("[   Up / Down  ] Tempo: {} BPM", self.tempo.round());
+        println!("[ Left / Right ] Gate length: {}", (10. * self.gate_length).round() / 10.);
+        println!("")
         println!("(Press [Esc] to exit)");
+        // println!("")
+        // println!("(debug) Rec Transpose: {}", self.rec_transpose);
+    }
+
+    pub fn print_sequence (&self) {
+        if self.seq_status == SeqStatus::Rec || !self.seq_notes.is_empty() {
+            println!("");
+            println!("Sequence: ");
+        }
+        if self.seq_status == SeqStatus::Rec && self.seq_notes.is_empty() {
+            println!("[ ]");
+        }
+        for (i, sq) in self.seq_notes.iter().enumerate() {
+            if i % 8 == 0 { print!("["); }
+            match sq {
+                SeqStep { is_awaiting_note: true, ..  } => print!("   MOD  "),
+                SeqStep { note: None, harmonic: None, timbre: None, morph: None, gate_length: None, .. } => print!(" (     )"),
+                SeqStep { note: None, .. } => print!(" ( MOD )"),
+                SeqStep { note: Some(note), harmonic: None, timbre: None, morph: None, gate_length: None, .. } => print!(" ({:>+0width$.prec$})", note, width=5, prec=1),
+                SeqStep { note: Some(note), .. } => print!(" MOD({:>+0width$.prec$})", note, width=5, prec=1),
+            };
+            if i % 8 == 7 || (i+1) == self.seq_notes.len() { println!(" ]"); }
+        }
+        println!("");
     }
 
     pub fn sequencer (arc_synth: Arc<Mutex<Synth>>) {
@@ -114,13 +156,14 @@ impl<'a> Synth<'a> {
                 synth.seq_status == SeqStatus::Play && !synth.seq_notes.is_empty()
             };
             if is_playing {
-                let seq_notes = {  arc_synth.lock().unwrap().seq_notes.to_owned() };
+                let seq_notes = {  arc_synth.lock().unwrap().seq_notes.clone() };
                 'play_loop: loop {
-                    for note in seq_notes.iter() {    
+                    for step in seq_notes.iter() {    
                         let (sec_gate_on, sec_gate_off) = { 
                             let synth = arc_synth.lock().unwrap();
+                            let gate_length = step.gate_length.unwrap_or(synth.gate_length);
                             let sec_per_8th = 30. / synth.tempo;
-                            let sec_gate_on = sec_per_8th * synth.gate_length;
+                            let sec_gate_on = sec_per_8th * gate_length;
                             let sec_gate_off = sec_per_8th - sec_gate_on;
                             (sec_gate_on, sec_gate_off)
                         };
@@ -129,9 +172,24 @@ impl<'a> Synth<'a> {
                             if synth.seq_status != SeqStatus::Play {
                                 break 'play_loop;
                             }
-                            synth.note = *note;
-                            synth.modulations.trigger = 1.;
-                            synth.modulations.level = 1.;
+                            if let Some(note) = step.note {
+                                synth.note = note;
+                                synth.modulations.trigger = 1.;
+                                synth.modulations.level = 1.;
+                            }
+                            if let Some(model) = step.model { synth.patch.engine = model; }
+                            if let Some(harmonic) = step.harmonic { 
+                                synth.smooth_harmonic = harmonic;
+                                synth.target_harmonic = harmonic;
+                            }
+                            if let Some(timbre) = step.timbre { 
+                                synth.smooth_timbre = timbre;
+                                synth.target_timbre = timbre;
+                            }
+                            if let Some(morph) = step.morph { 
+                                synth.smooth_morph = morph;
+                                synth.target_morph = morph;
+                            }
                         }
                         thread::sleep(Duration::from_secs_f64(sec_gate_on));
                         {
@@ -143,7 +201,6 @@ impl<'a> Synth<'a> {
                     }
                 }
             }
-            thread::sleep(Duration::from_millis(100));
         }
     }
 
@@ -153,11 +210,11 @@ impl<'a> Synth<'a> {
             let time  = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_millis() as f32 / 1000.;
 
             s.smooth_bend = (BEND_SMOOTH_FACTOR * s.target_bend) + (BEND_SMOOTH_FACTOR_INV * s.smooth_bend);
-            s.smooth_vibrato = f32::min(
-                (VIBRATO_PRESS_SMOOTH_FACTOR * s.target_vibrato) + (VIBRATO_PRESS_SMOOTH_FACTOR_INV * s.smooth_vibrato),
-                (VIBRATO_RELEASE_SMOOTH_FACTOR * s.target_vibrato) + (VIBRATO_RELEASE_SMOOTH_FACTOR_INV * s.smooth_vibrato),
+            s.smooth_vibrato_amount = f32::min(
+                (VIBRATO_PRESS_SMOOTH_FACTOR * s.target_vibrato_amount) + (VIBRATO_PRESS_SMOOTH_FACTOR_INV * s.smooth_vibrato_amount),
+                (VIBRATO_RELEASE_SMOOTH_FACTOR * s.target_vibrato_amount) + (VIBRATO_RELEASE_SMOOTH_FACTOR_INV * s.smooth_vibrato_amount),
             );
-            let vibrato =  s.smooth_vibrato * (PI * time * 10.).sin();
+            let vibrato =  s.smooth_vibrato_amount * (VIBRATO_RATE * time).sin();
             s.patch.note = s.note + s.transpose + s.smooth_bend + vibrato;
             
             s.smooth_harmonic = (PARAM_SMOOTH_FACTOR * s.target_harmonic) + (PARAM_SMOOTH_FACTOR_INV * s.smooth_harmonic);
@@ -166,6 +223,29 @@ impl<'a> Synth<'a> {
             s.patch.harmonics = s.smooth_harmonic;
             s.patch.timbre    = s.smooth_timbre;
             s.patch.morph     = s.smooth_morph;
+        }
+    }
+
+    fn record_step (&mut self, param: SeqStepParam, value: f32) -> () {
+        if self.seq_status != SeqStatus::Rec {
+            return;
+        }
+        if self.seq_notes.is_empty() || !(self.seq_notes.last().unwrap().is_awaiting_note) { 
+            self.seq_notes.push(SeqStep::default());
+        }       
+        let step = self.seq_notes.last_mut().unwrap();
+        match param {
+            SeqStepParam::Rest => step.note = None,
+            SeqStepParam::Note => step.note = Some(value),
+            SeqStepParam::Model => step.model = Some(value as usize),
+            SeqStepParam::Harmonic => step.harmonic = Some(value),
+            SeqStepParam::Timbre => step.timbre = Some(value),
+            SeqStepParam::Morph => step.morph = Some(value),
+            SeqStepParam::GateLength => step.gate_length = Some(value as f64),
+        };
+        match param {
+            SeqStepParam::Rest | SeqStepParam::Note => step.is_awaiting_note = false,
+            _ => step.is_awaiting_note = true,
         }
     }
 }
@@ -206,9 +286,7 @@ impl<'a> AudioGenerator for Synth<'a> {
                 self.modulations.trigger = 1.0;
                 self.modulations.level = 1.0;
                 self.pressed_set.insert(key);
-                if self.seq_status == SeqStatus::Rec {
-                    self.seq_notes.push(note);
-                }
+                self.record_step(SeqStepParam::Note, note + self.rec_transpose);
             }
             // Handle note release
             KeyRelease(key) if notes.contains_key(&key) => {
@@ -224,34 +302,62 @@ impl<'a> AudioGenerator for Synth<'a> {
             KeyPress(Key::Escape) => std::process::exit(0),
 
             // Model
-            KeyPress(Key::F1) => self.patch.engine = if self.patch.engine > 1 {self.patch.engine - 1} else {0},
-            KeyPress(Key::F2) => self.patch.engine = cmp::min(self.patch.engine + 1, 23),
+            KeyPress(Key::F1) => {
+                self.patch.engine = if self.patch.engine > 1 {self.patch.engine - 1} else {0};
+                self.record_step(SeqStepParam::Model, self.patch.engine as f32);
+            }
+            KeyPress(Key::F2) => {
+                self.patch.engine = cmp::min(self.patch.engine + 1, 23);
+                self.record_step(SeqStepParam::Model, self.patch.engine as f32);
+            }
 
             // Harmonics
-            KeyPress(Key::F3) => self.target_harmonic = (self.target_harmonic - 0.1).max(0.),
-            KeyPress(Key::F4) => self.target_harmonic = (self.target_harmonic + 0.1).min(1.),
+            KeyPress(Key::F3) => {
+                self.target_harmonic = (self.target_harmonic - 0.1).max(0.);
+                self.record_step(SeqStepParam::Harmonic, self.target_harmonic);
+            }
+            KeyPress(Key::F4) => {
+                self.target_harmonic = (self.target_harmonic + 0.1).min(1.);
+                self.record_step(SeqStepParam::Harmonic, self.target_harmonic);
+            }
             
             // Timbre
-            KeyPress(Key::F5) => self.target_timbre = (self.target_timbre - 0.1).max(0.),
-            KeyPress(Key::F6) => self.target_timbre = (self.target_timbre + 0.1).min(1.),
+            KeyPress(Key::F5) => {
+                self.target_timbre = (self.target_timbre - 0.1).max(0.);
+                self.record_step(SeqStepParam::Timbre, self.target_timbre);
+            }
+            KeyPress(Key::F6) => {
+                self.target_timbre = (self.target_timbre + 0.1).min(1.);
+                self.record_step(SeqStepParam::Timbre, self.target_timbre);
+            }
 
             // Morph
-            KeyPress(Key::F7) => self.target_morph = (self.target_morph - 0.1).max(0.),
-            KeyPress(Key::F8) => self.target_morph = (self.target_morph + 0.1).min(1.),
+            KeyPress(Key::F7) => {
+                self.target_morph = (self.target_morph - 0.1).max(0.);
+                self.record_step(SeqStepParam::Morph, self.target_morph);
+            }
+            KeyPress(Key::F8) => {
+                self.target_morph = (self.target_morph + 0.1).min(1.);
+                self.record_step(SeqStepParam::Morph, self.target_morph);
+            }
 
             // Decay
-            KeyPress(Key::F9)  => self.patch.decay = (self.patch.decay - 0.1).max(0.),
-            KeyPress(Key::F10) => self.patch.decay = (self.patch.decay + 0.1).min(1.),
+            KeyPress(Key::F9)  => {
+                self.patch.decay = (self.patch.decay - 0.1).max(0.);
+            }
+            KeyPress(Key::F10) => {
+                self.patch.decay = (self.patch.decay + 0.1).min(1.);
+            }
             
             // Transpose
             KeyPress(Key::Dot) => { 
                 self.transpose  -= 12.;
-                self.note -= 12.;
+                self.rec_transpose -= 12.;
                 self.info_octave -= 1;
             }
             KeyPress(Key::Minus) => { 
                 self.transpose  += 12.;
-                self.note += 12.;
+                self.rec_transpose += 12.;
                 self.info_octave += 1;
             }
 
@@ -261,14 +367,15 @@ impl<'a> AudioGenerator for Synth<'a> {
             KeyRelease(Key::ShiftLeft | Key::IntlBackslash) => self.target_bend = BEND_NEUTRAL,
 
             // Vibrato
-            KeyPress(Key::ControlLeft)   => self.target_vibrato = VIBRATO_DEPTH,
-            KeyRelease(Key::ControlLeft) => self.target_vibrato = 0.,
+            KeyPress(Key::ControlLeft)   => self.target_vibrato_amount = VIBRATO_DEPTH,
+            KeyRelease(Key::ControlLeft) => self.target_vibrato_amount = 0.,
 
             // Sequencer
             KeyPress(Key::LeftBracket) => {
+                self.seq_notes = Vec::default();
+                self.rec_transpose = 0.;
                 if self.seq_status != SeqStatus::Rec {
                     self.seq_status = SeqStatus::Rec;
-                    self.seq_notes = Vec::default();
                 }
             }
             KeyPress(Key::RightBracket) => { 
@@ -276,8 +383,29 @@ impl<'a> AudioGenerator for Synth<'a> {
                     SeqStatus::Rec => SeqStatus::Play,
                     SeqStatus::Play => SeqStatus::Stop,
                     SeqStatus::Stop => SeqStatus::Play,
+                    _ => SeqStatus::Stop,
                 }
             }
+
+            // Recording
+            KeyPress(Key::Num0) => {
+                self.rec_transpose = 0.;
+                self.record_step(SeqStepParam::Rest, 0.);
+            }
+            KeyPress(Key::Backspace) => {
+                self.seq_notes.pop();
+            }
+
+            // Gate Length
+            KeyPress(Key::LeftArrow) => {
+                self.gate_length = (self.gate_length - 0.1).max(0.1);
+                self.record_step(SeqStepParam::GateLength, self.gate_length as f32);
+            }
+            KeyPress(Key::RightArrow) => {
+                self.gate_length = (self.gate_length + 0.1).min(1.);
+                self.record_step(SeqStepParam::GateLength, self.gate_length as f32);
+            }
+
 
             // Tempo
             KeyPress(Key::DownArrow) => self.tempo -= 4.0,
@@ -293,10 +421,12 @@ impl<'a> AudioGenerator for Synth<'a> {
         match event.event_type {
             KeyPress(
                 Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 |
-                Key::LeftBracket | Key::RightBracket | Key::UpArrow | Key::DownArrow | Key::Dot | Key::Minus
+                Key::LeftBracket | Key::RightBracket | Key::UpArrow | Key::DownArrow | Key::Dot | Key::Minus | Key::LeftArrow | Key::RightArrow
             ) => {
                 self.print_info();
-            }
+            },
+            KeyPress(key) if notes.contains_key(&key) && self.seq_status == SeqStatus::Rec => self.print_info(),
+            KeyPress(Key::Num0) if self.seq_status == SeqStatus::Rec => self.print_info(),
             _ => ()
         }
     }
