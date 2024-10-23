@@ -108,11 +108,11 @@ impl<'a> Synth<'a> {
         println!("[ F5-F6 ]   Timbre: {}", (10. * self.target_timbre).round() / 10.);
         println!("[ F7-F8 ]    Morph: {}", (10. * self.target_morph).round() / 10.);
         println!("[ F9-10 ]    Decay: {}", (10. * self.patch.decay).round() / 10.);
-        println!("   [ Backspace: Remove last step] [ 0 Rest ] [ '? {:?} ] [ ¡¿ {:?} ]", 
+        println!("");
+        println!("                   [ 0 Rest ] [ '? {:?} ] [ ¡¿ {:?} ] [ BKSP: Undo ]", 
             if self.seq_status != SeqStatus::Rec {SeqStatus::Rec} else {SeqStatus::Clr},
             if self.seq_status != SeqStatus::Play {SeqStatus::Play} else {SeqStatus::Stop}
         );
-        println!("");
         println!("+-----------------------------------------------------------------+");
         println!("|    s   d   f   g   h   j   k       3   4   5   6   7   8   9    |");
         println!("|  z   x   c   v   b   n   m   ,   w   e   r   t   y   u   i   o  |");
