@@ -1,6 +1,8 @@
 use crate::audio_shell::AudioGenerator;
 use mi_plaits_dsp::dsp::voice::{Modulations, Patch, Voice};
 
+use crate::keyboard_utils::ch;
+
 use std::vec;
 use std::collections::HashMap;
 use linked_hash_set::LinkedHashSet;
@@ -14,7 +16,7 @@ use spin_sleep;
 use rdev::{Event, Key};
 use rdev::EventType::{KeyPress, KeyRelease};
 
-use num::{Float, Num, NumCast, ToPrimitive};
+use num::{Num, NumCast, ToPrimitive};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SeqStatus {
@@ -116,12 +118,18 @@ impl<'a> Synth<'a> {
         println!("[ F7-F8 ]    Morph: {}", (10. * self.target_morph).round() / 10.);
         println!("[ F9-10 ]    Decay: {}", (10. * self.patch.decay).round() / 10.);
         println!("");
-        println!("                           [ '? Rest ] [ ¡¿ {} ] [ BKSP Clear ]", 
+        println!("                           [ {} Rest ] [ {} {} ] [ BKSP Clear ]", 
+            ch(VK_LeftBracket), ch(VK_RightBracket),
             if self.seq_status != SeqStatus::Recording {"Record"} else {"  Undo"},
         );
         println!("+-----------------------------------------------------------------+");
-        println!("|    s   d   f   g   h   j   k       3   4   5   6   7   8   9    |");
-        println!("|  z   x   c   v   b   n   m   ,   w   e   r   t   y   u   i   o  |");
+        println!("|    {}   {}   {}   {}   {}   {}   {}       3   4   5   6   7   8   9    |", 
+            ch(VK_S), ch(VK_D), ch(VK_F), ch(VK_G), ch(VK_H), ch(VK_J), ch(VK_K),
+        );
+        println!("|  {}   {}   {}   {}   {}   {}   {}   {}   {}   {}   {}   {}   {}   {}   {}   {}  |",
+            ch(VK_Z), ch(VK_X), ch(VK_C), ch(VK_V), ch(VK_B), ch(VK_N), ch(VK_M), ch(VK_Comma),
+            ch(VK_W), ch(VK_E), ch(VK_R), ch(VK_T), ch(VK_Y), ch(VK_U), ch(VK_I), ch(VK_O),
+        );
         println!("+-----------------------------------------------------------------+");
         println!("[ LSHIFT  > ] Pitch Bend    [ LCTRL ] Vibrato   [ . - ]  Octave: {} ", self.info_octave);
         println!("                     [   SPACE_BAR    {:?}   ]",
@@ -135,8 +143,6 @@ impl<'a> Synth<'a> {
         println!("(Press [Esc] to exit)");
         // println!("")
         // println!("(debug) Rec Transpose: {}", self.rec_transpose);
-        
-        println!("{:#?}", self.seq_notes);
     }
 
     pub fn print_sequence (&self) {
@@ -506,3 +512,107 @@ fn dec_f32 (value: &mut f32) { *value = (*value - 0.1).max(0.); }
 fn inc_f32 (value: &mut f32) { *value = (*value + 0.1).min(1.); }
 fn dec_f64 (value: &mut f64) { *value = (*value - 0.1).max(0.); }
 fn inc_f64 (value: &mut f64) { *value = (*value + 0.1).min(1.); }
+
+
+const VK_Alt: u32 = 164;
+const VK_AltGr: u32 = 165;
+const VK_Backspace: u32 = 0x08;
+const VK_CapsLock: u32 = 20;
+const VK_ControlLeft: u32 = 162;
+const VK_ControlRight: u32 = 163;
+const VK_Delete: u32 = 46;
+const VK_DownArrow: u32 = 40;
+const VK_End: u32 = 35;
+const VK_Escape: u32 = 27;
+const VK_F1: u32 = 112;
+const VK_F10: u32 = 121;
+const VK_F11: u32 = 122;
+const VK_F12: u32 = 123;
+const VK_F2: u32 = 113;
+const VK_F3: u32 = 114;
+const VK_F4: u32 = 115;
+const VK_F5: u32 = 116;
+const VK_F6: u32 = 117;
+const VK_F7: u32 = 118;
+const VK_F8: u32 = 119;
+const VK_F9: u32 = 120;
+const VK_Home: u32 = 36;
+const VK_LeftArrow: u32 = 37;
+const VK_MetaLeft: u32 = 91;
+const VK_PageDown: u32 = 34;
+const VK_PageUp: u32 = 33;
+const VK_Return: u32 = 0x0D;
+const VK_RightArrow: u32 = 39;
+const VK_ShiftLeft: u32 = 160;
+const VK_ShiftRight: u32 = 161;
+const VK_Space: u32 = 32;
+const VK_Tab: u32 = 0x09;
+const VK_UpArrow: u32 = 38;
+const VK_PrintScreen: u32 = 44;
+const VK_ScrollLock: u32 = 145;
+const VK_Pause: u32 = 19;
+const VK_NumLock: u32 = 144;
+const VK_BackQuote: u32 = 192;
+const VK_1: u32 = 49;
+const VK_2: u32 = 50;
+const VK_3: u32 = 51;
+const VK_4: u32 = 52;
+const VK_5: u32 = 53;
+const VK_6: u32 = 54;
+const VK_7: u32 = 55;
+const VK_8: u32 = 56;
+const VK_9: u32 = 57;
+const VK_0: u32 = 48;
+const VK_Minus: u32 = 189;
+const VK_Equal: u32 = 187;
+const VK_Q: u32 = 81;
+const VK_W: u32 = 87;
+const VK_E: u32 = 69;
+const VK_R: u32 = 82;
+const VK_T: u32 = 84;
+const VK_Y: u32 = 89;
+const VK_U: u32 = 85;
+const VK_I: u32 = 73;
+const VK_O: u32 = 79;
+const VK_P: u32 = 80;
+const VK_LeftBracket: u32 = 219;
+const VK_RightBracket: u32 = 221;
+const VK_A: u32 = 65;
+const VK_S: u32 = 83;
+const VK_D: u32 = 68;
+const VK_F: u32 = 70;
+const VK_G: u32 = 71;
+const VK_H: u32 = 72;
+const VK_J: u32 = 74;
+const VK_K: u32 = 75;
+const VK_L: u32 = 76;
+const VK_SemiColon: u32 = 186;
+const VK_Quote: u32 = 222;
+const VK_BackSlash: u32 = 220;
+const VK_IntlBackslash: u32 = 226;
+const VK_Z: u32 = 90;
+const VK_X: u32 = 88;
+const VK_C: u32 = 67;
+const VK_V: u32 = 86;
+const VK_B: u32 = 66;
+const VK_N: u32 = 78;
+const VK_M: u32 = 77;
+const VK_Comma: u32 = 188;
+const VK_Dot: u32 = 190;
+const VK_Slash: u32 = 191;
+const VK_Insert: u32 = 45;
+const VK_KpMinus: u32 = 109;
+const VK_KpPlus: u32 = 107;
+const VK_KpMultiply: u32 = 106;
+const VK_KpDivide: u32 = 111;
+const VK_Kp0: u32 = 96;
+const VK_Kp1: u32 = 97;
+const VK_Kp2: u32 = 98;
+const VK_Kp3: u32 = 99;
+const VK_Kp4: u32 = 100;
+const VK_Kp5: u32 = 101;
+const VK_Kp6: u32 = 102;
+const VK_Kp7: u32 = 103;
+const VK_Kp8: u32 = 104;
+const VK_Kp9: u32 = 105;
+const VK_KpDelete: u32 = 110;

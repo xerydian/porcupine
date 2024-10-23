@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 // Reference: https://github.com/sourcebox/mi-plaits-dsp-rs/blob/firmware-1.2/examples/midi control.rs
 // Reference: https://github.com/Narsil/rdev/blob/main/examples/listen.rs
 
@@ -11,6 +13,8 @@ use audio_shell::{AudioShell, AudioGenerator};
 mod synth;
 use synth::Synth;
 use rdev::Event;
+
+mod keyboard_utils;
 
 const SAMPLE_RATE: u32 = 48000;
 const BLOCK_SIZE: usize = 2048;
