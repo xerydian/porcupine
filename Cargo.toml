@@ -9,4 +9,5 @@ lazy_static = "1.5.0"
 linked_hash_set = "0.1.4"
 mi-plaits-dsp = { git = "https://github.com/sourcebox/mi-plaits-dsp-rs" }
 rdev = "0.5.3"
+spin_sleep = "1.2.1"
 tinyaudio = "0.2.0"

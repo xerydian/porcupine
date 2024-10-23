@@ -7,15 +7,15 @@ use linked_hash_set::LinkedHashSet;
 use lazy_static::lazy_static;
 
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use spin_sleep;
 
 use rdev::{Event, Key};
 use rdev::EventType::{KeyPress, KeyRelease};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SeqStatus {
-    Rec, Clr, Play, Stop
+    Recording, Play, Stop
 }
 
 #[derive(Default, Clone, Copy)]
@@ -109,15 +109,17 @@ impl<'a> Synth<'a> {
         println!("[ F7-F8 ]    Morph: {}", (10. * self.target_morph).round() / 10.);
         println!("[ F9-10 ]    Decay: {}", (10. * self.patch.decay).round() / 10.);
         println!("");
-        println!("                    [ 0 Rest ] [ '? {:?} ] [ ¡¿ {:?} ] [ BKSP Undo ]", 
-            if self.seq_status != SeqStatus::Rec {SeqStatus::Rec} else {SeqStatus::Clr},
-            if self.seq_status != SeqStatus::Play {SeqStatus::Play} else {SeqStatus::Stop}
+        println!("                           [ '? Rest ] [ ¡¿ {} ] [ BKSP Clear ]", 
+            if self.seq_status != SeqStatus::Recording {"Record"} else {"  Undo"},
         );
         println!("+-----------------------------------------------------------------+");
         println!("|    s   d   f   g   h   j   k       3   4   5   6   7   8   9    |");
         println!("|  z   x   c   v   b   n   m   ,   w   e   r   t   y   u   i   o  |");
         println!("+-----------------------------------------------------------------+");
         println!("[ LSHIFT  > ] Pitch Bend    [ LCTRL ] Vibrato   [ . - ]  Octave: {} ", self.info_octave);
+        println!("                     [   SPACE_BAR    {:?}   ]",
+            if self.seq_status != SeqStatus::Play {"Play"} else {"Stop"}
+        );
         self.print_sequence();
         println!("                 Transport: {:?}", self.seq_status);
         println!("[   Up / Down  ] Tempo: {} BPM", self.tempo.round());
@@ -129,11 +131,11 @@ impl<'a> Synth<'a> {
     }
 
     pub fn print_sequence (&self) {
-        if self.seq_status == SeqStatus::Rec || !self.seq_notes.is_empty() {
+        if self.seq_status == SeqStatus::Recording || !self.seq_notes.is_empty() {
             println!("");
             println!("Sequence: ");
         }
-        if self.seq_status == SeqStatus::Rec && self.seq_notes.is_empty() {
+        if self.seq_status == SeqStatus::Recording && self.seq_notes.is_empty() {
             println!("[ ]");
         }
         for (i, sq) in self.seq_notes.iter().enumerate() {
@@ -160,6 +162,7 @@ impl<'a> Synth<'a> {
                 let seq_notes = {  arc_synth.lock().unwrap().seq_notes.clone() };
                 'play_loop: loop {
                     for step in seq_notes.iter() {    
+                        let delta = Instant::now();
                         let (sec_gate_on, sec_gate_off) = { 
                             let synth = arc_synth.lock().unwrap();
                             let gate_length = step.gate_length.unwrap_or(synth.gate_length);
@@ -192,13 +195,14 @@ impl<'a> Synth<'a> {
                                 synth.target_morph = morph;
                             }
                         }
-                        thread::sleep(Duration::from_secs_f64(sec_gate_on));
+                        spin_sleep::sleep(Duration::from_secs_f64(sec_gate_on) - delta.elapsed()); 
+                        let delta = Instant::now();
                         {
                             let mut synth = arc_synth.lock().unwrap();
                             synth.modulations.trigger = 0.;
                             synth.modulations.level = 0.;                    
                         }
-                        thread::sleep(Duration::from_secs_f64(sec_gate_off));
+                        spin_sleep::sleep(Duration::from_secs_f64(sec_gate_off) - delta.elapsed());
                     }
                 }
             }
@@ -228,7 +232,7 @@ impl<'a> Synth<'a> {
     }
 
     fn record_step (&mut self, param: SeqStepParam, value: f32) -> () {
-        if self.seq_status != SeqStatus::Rec {
+        if self.seq_status != SeqStatus::Recording {
             return;
         }
         if self.seq_notes.is_empty() || !(self.seq_notes.last().unwrap().is_awaiting_note) { 
@@ -373,28 +377,27 @@ impl<'a> AudioGenerator for Synth<'a> {
 
             // Sequencer
             KeyPress(Key::LeftBracket) => {
-                self.seq_notes = Vec::default();
-                self.rec_transpose = 0.;
-                if self.seq_status != SeqStatus::Rec {
-                    self.seq_status = SeqStatus::Rec;
-                }
-            }
-            KeyPress(Key::RightBracket) => { 
-                self.seq_status = match self.seq_status {
-                    SeqStatus::Rec => SeqStatus::Play,
-                    SeqStatus::Play => SeqStatus::Stop,
-                    SeqStatus::Stop => SeqStatus::Play,
-                    _ => SeqStatus::Stop,
-                }
-            }
-
-            // Recording
-            KeyPress(Key::Num0) => {
                 self.rec_transpose = 0.;
                 self.record_step(SeqStepParam::Rest, 0.);
             }
+            KeyPress(Key::RightBracket) => {
+                self.rec_transpose = 0.;
+                if self.seq_status == SeqStatus::Recording {
+                    self.seq_notes.pop();
+                }
+                else {
+                    self.seq_status = SeqStatus::Recording;
+                }
+            }
             KeyPress(Key::Backspace) => {
-                self.seq_notes.pop();
+                self.seq_notes = Vec::default();
+            }
+            KeyPress(Key::Space) => { 
+                self.seq_status = match self.seq_status {
+                    SeqStatus::Recording => SeqStatus::Play,
+                    SeqStatus::Play => SeqStatus::Stop,
+                    SeqStatus::Stop => SeqStatus::Play,
+                }
             }
 
             // Gate Length
@@ -406,7 +409,6 @@ impl<'a> AudioGenerator for Synth<'a> {
                 self.gate_length = (self.gate_length + 0.1).min(1.);
                 self.record_step(SeqStepParam::GateLength, self.gate_length as f32);
             }
-
 
             // Tempo
             KeyPress(Key::DownArrow) => self.tempo -= 4.0,
@@ -422,12 +424,12 @@ impl<'a> AudioGenerator for Synth<'a> {
         match event.event_type {
             KeyPress(
                 Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 |
-                Key::LeftBracket | Key::RightBracket | Key::UpArrow | Key::DownArrow | Key::Dot | Key::Minus | Key::LeftArrow | Key::RightArrow
+                Key::Space | Key::RightBracket | Key::UpArrow | Key::DownArrow | Key::Dot | Key::Minus | Key::LeftArrow | Key::RightArrow
             ) => {
                 self.print_info();
             },
-            KeyPress(key) if notes.contains_key(&key) && self.seq_status == SeqStatus::Rec => self.print_info(),
-            KeyPress(Key::Num0 | Key::Backspace) if self.seq_status == SeqStatus::Rec => self.print_info(),
+            KeyPress(key) if notes.contains_key(&key) && self.seq_status == SeqStatus::Recording => self.print_info(),
+            KeyPress(Key::LeftBracket | Key::Backspace) if self.seq_status == SeqStatus::Recording => self.print_info(),
             _ => ()
         }
     }
