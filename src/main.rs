@@ -3,7 +3,7 @@
 
 use lazy_static::lazy_static;
 
-use std::cmp;
+use std::{cmp, vec};
 use std::sync::{Arc, Mutex};
 
 use std::collections::HashMap;
@@ -21,33 +21,41 @@ const SAMPLE_RATE: u32 = 48000;
 const BLOCK_SIZE: usize = 2048;
 
 fn main() {
-    let instr = Arc::new(Mutex::new(App::new()));
+    let instr = Arc::new(Mutex::new(Synth::new()));
     let _shell = AudioShell::spawn(SAMPLE_RATE, BLOCK_SIZE, instr.clone());
     if let Err(error) = listen(get_callback(instr)) {
         println!("Error: {:?}", error)
     }
 }
 
-struct App<'a> {
+struct Synth<'a> {
     voice: Voice<'a>,
     patch: Patch,
     modulations: Modulations,
-    volume: f32,
-    balance: f32,
-    pressed_set: LinkedHashSet<Key>,
+    // volume: f32,
+    // balance: f32,
+    octave: i32,
     transpose: f32,
+    tempo: f32,
+    pressed_set: LinkedHashSet<Key>,
+    sequence: Vec<f32>,
+    seq_status: SeqStatus,
 }
 
-impl<'a> App<'a> {
+impl<'a> Synth<'a> {
     pub fn new() -> Self {
         Self {
             voice: Voice::new(&std::alloc::System, BLOCK_SIZE),
             patch: Patch::default(),
             modulations: Modulations::default(),
-            volume: 1.0,
-            balance: 0.0,
+            // volume: 1.0,
+            // balance: 0.0,
+            octave: 5,
             transpose: 48.0,
+            tempo: 120.,
             pressed_set: LinkedHashSet::default(),
+            sequence: Vec::default(),
+            seq_status: SeqStatus::Stop,
         }
     }
 }
@@ -59,7 +67,12 @@ fn get_callback(audio_generator: Arc<Mutex<impl AudioGenerator>>) -> impl FnMut(
     }
 }
 
-impl<'a> AudioGenerator for App<'a> {
+#[derive(Debug, PartialEq, Eq)]
+enum SeqStatus {
+    Load, Play, Stop
+}
+
+impl<'a> AudioGenerator for Synth<'a> {
     fn init(&mut self, _block_size: usize) {
         self.patch.engine = 8;
         self.patch.harmonics = 0.5;
@@ -78,23 +91,25 @@ impl<'a> AudioGenerator for App<'a> {
 
         self.voice.render(&self.patch, &self.modulations, &mut out, &mut aux);
 
-        let mut mix = vec![0.0; BLOCK_SIZE];
-
-        for frame in 0..BLOCK_SIZE {
-            mix[frame] = (out[frame] * (1.0 - self.balance) + aux[frame] * self.balance) * self.volume;
-        }
-
-        samples_left.clone_from_slice(&mix);
-        samples_right.clone_from_slice(&mix);
+        // let mut mix = vec![0.0; BLOCK_SIZE];
+        // for frame in 0..BLOCK_SIZE {
+        //     mix[frame] = (out[frame] * (1.0 - self.balance) + aux[frame] * self.balance) * self.volume;
+        // } 
+        samples_left.clone_from_slice(&out);
+        samples_right.clone_from_slice(&out);
     }
 
     fn process_events(&mut self, event: Event) {
         match event.event_type {
             KeyPress(key) if notes.contains_key(&key) => {
-                self.patch.note = *notes.get(&key).unwrap() + self.transpose;
+                let note = *notes.get(&key).unwrap() + self.transpose;
+                self.patch.note = note;
                 self.modulations.trigger = 1.0;
                 self.modulations.level = 1.0;
                 self.pressed_set.insert(key);
+                if self.seq_status == SeqStatus::Load {
+                    self.sequence.push(note);
+                }
             }
             // Handle note release
             KeyRelease(key) if notes.contains_key(&key) => {
@@ -149,22 +164,53 @@ impl<'a> AudioGenerator for App<'a> {
                 self.patch.decay = (self.patch.decay + 0.1).min(1.);
             }
             
-            // Decay
+            // Transpose
             KeyPress(Key::Dot) => { 
                 self.transpose  -= 12.;
                 self.patch.note -= 12.;
+                self.octave -= 1;
             }
             KeyPress(Key::Minus) => { 
                 self.transpose  += 12.;
                 self.patch.note += 12.;
+                self.octave += 1;
             }
+
+            // Sequencer
+            KeyPress(Key::LeftBracket) => {
+                if self.seq_status != SeqStatus::Load {
+                    self.seq_status = SeqStatus::Load;
+                    self.sequence = Vec::default();
+                }
+            }
+            KeyPress(Key::RightBracket) => { 
+                self.seq_status = match self.seq_status {
+                    SeqStatus::Load => SeqStatus::Play,
+                    SeqStatus::Play => SeqStatus::Stop,
+                    SeqStatus::Stop => SeqStatus::Play,
+                }
+            }
+
+            // Tempo
+            KeyPress(Key::DownArrow) => {
+                self.tempo -= 4.0;
+            }
+            KeyPress(Key::UpArrow) => { 
+                self.tempo += 4.0;
+            }
+
+            // Debug
+            // KeyPress(key) => println!("{:?}", key),
 
             // Not implemented: self.balance, self.volume, self.patch.lpg_colour
             _ => {}
         }
         // debug
         match event.event_type {
-            KeyPress(Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10) => {
+            KeyPress(
+                Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 |
+                Key::LeftBracket | Key::RightBracket | Key::UpArrow | Key::DownArrow
+            ) => {
                 self.print_info();
             }
             _ => ()
@@ -172,7 +218,7 @@ impl<'a> AudioGenerator for App<'a> {
     }
 }
 
-impl<'a> App<'a> {
+impl<'a> Synth<'a> {
     fn print_info (&self) {
         clearscreen::clear().unwrap();
         println!("[ F1-F2 ]    Model: {}", ENGINE_DESCRIPIONS[self.patch.engine]);
@@ -180,13 +226,22 @@ impl<'a> App<'a> {
         println!("[ F5-F6 ]   Timbre: {}", (10. * self.patch.timbre).round() / 10.);
         println!("[ F7-F8 ]    Morph: {}", (10. * self.patch.morph).round() / 10.);
         println!("[ F9-10 ]    Decay: {}", (10. * self.patch.decay).round() / 10.);
+        println!("                         [ '? Load ] [ ¡¿ {:?} ] [ Up/Down: Tempo ]", 
+            if self.seq_status != SeqStatus::Play {SeqStatus::Play} else {SeqStatus::Stop}
+        );
         println!("+-----------------------------------------------------------------+    Octave  ");
         println!("|    s   d   f   g   h   j   k       3   4   5   6   7   8   9    |  +--------+");
         println!("|  z   x   c   v   b   n   m   ,   w   e   r   t   y   u   i   o  |  |  .  -  |");
         println!("+-----------------------------------------------------------------+  +--------+");
         println!("");
+        println!("Octave: {}", self.octave);
+        println!("Sequencer: {:?}", self.seq_status);
+        println!("Tempo: {} BPM", self.tempo.round());
+        println!("");
         println!("(Press [Esc] to exit)");
     }
+
+    
 }
 
 lazy_static! {
