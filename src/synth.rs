@@ -112,6 +112,7 @@ impl<'a> Synth<'a> {
             if self.seq_status != SeqStatus::Rec {SeqStatus::Rec} else {SeqStatus::Clr},
             if self.seq_status != SeqStatus::Play {SeqStatus::Play} else {SeqStatus::Stop}
         );
+        println!("");
         println!("+-----------------------------------------------------------------+");
         println!("|    s   d   f   g   h   j   k       3   4   5   6   7   8   9    |");
         println!("|  z   x   c   v   b   n   m   ,   w   e   r   t   y   u   i   o  |");
@@ -121,7 +122,7 @@ impl<'a> Synth<'a> {
         println!("                 Transport: {:?}", self.seq_status);
         println!("[   Up / Down  ] Tempo: {} BPM", self.tempo.round());
         println!("[ Left / Right ] Gate length: {}", (10. * self.gate_length).round() / 10.);
-        println!("")
+        println!("");
         println!("(Press [Esc] to exit)");
         // println!("")
         // println!("(debug) Rec Transpose: {}", self.rec_transpose);
@@ -426,7 +427,7 @@ impl<'a> AudioGenerator for Synth<'a> {
                 self.print_info();
             },
             KeyPress(key) if notes.contains_key(&key) && self.seq_status == SeqStatus::Rec => self.print_info(),
-            KeyPress(Key::Num0) if self.seq_status == SeqStatus::Rec => self.print_info(),
+            KeyPress(Key::Num0 | Key::Backspace) if self.seq_status == SeqStatus::Rec => self.print_info(),
             _ => ()
         }
     }
