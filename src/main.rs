@@ -3,7 +3,9 @@
 
 use lazy_static::lazy_static;
 
-use std::{cmp, vec};
+use std::time::Duration;
+use std::{cmp, thread, vec};
+
 use std::sync::{Arc, Mutex};
 
 use std::collections::HashMap;
@@ -14,7 +16,7 @@ use mi_plaits_dsp::dsp::voice::{Modulations, Patch, Voice};
 mod audio_shell;
 use crate::audio_shell::{AudioShell, AudioGenerator};
 
-use rdev::{listen, Event, Key};
+use rdev::{Event, Key};
 use rdev::EventType::{KeyPress, KeyRelease};
 
 const SAMPLE_RATE: u32 = 48000;
@@ -23,9 +25,16 @@ const BLOCK_SIZE: usize = 2048;
 fn main() {
     let instr = Arc::new(Mutex::new(Synth::new()));
     let _shell = AudioShell::spawn(SAMPLE_RATE, BLOCK_SIZE, instr.clone());
-    if let Err(error) = listen(get_callback(instr)) {
-        println!("Error: {:?}", error)
-    }
+
+    let instr_1 = instr.clone();
+    let _sequencer = thread::spawn(move || {
+        sequencer(instr_1);
+    });
+    
+    let instr_2 = instr.clone();
+    let _keyboard = rdev::listen(move |event: Event| {
+        instr_2.lock().unwrap().process_events(event);
+    }); // handle keystrokes, blocking
 }
 
 struct Synth<'a> {
@@ -36,9 +45,10 @@ struct Synth<'a> {
     // balance: f32,
     octave: i32,
     transpose: f32,
-    tempo: f32,
+    tempo: f64,
+    gate_length: f64,
     pressed_set: LinkedHashSet<Key>,
-    sequence: Vec<f32>,
+    seq_notes: Vec<f32>,
     seq_status: SeqStatus,
 }
 
@@ -53,23 +63,17 @@ impl<'a> Synth<'a> {
             octave: 5,
             transpose: 48.0,
             tempo: 120.,
+            gate_length: 0.5,
             pressed_set: LinkedHashSet::default(),
-            sequence: Vec::default(),
+            seq_notes: Vec::default(),
             seq_status: SeqStatus::Stop,
         }
     }
 }
 
-
-fn get_callback(audio_generator: Arc<Mutex<impl AudioGenerator>>) -> impl FnMut(Event) {
-    move |event: Event| {
-        audio_generator.lock().unwrap().process_events(event);
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 enum SeqStatus {
-    Load, Play, Stop
+    Rec, Play, Stop
 }
 
 impl<'a> AudioGenerator for Synth<'a> {
@@ -107,8 +111,8 @@ impl<'a> AudioGenerator for Synth<'a> {
                 self.modulations.trigger = 1.0;
                 self.modulations.level = 1.0;
                 self.pressed_set.insert(key);
-                if self.seq_status == SeqStatus::Load {
-                    self.sequence.push(note);
+                if self.seq_status == SeqStatus::Rec {
+                    self.seq_notes.push(note);
                 }
             }
             // Handle note release
@@ -178,14 +182,14 @@ impl<'a> AudioGenerator for Synth<'a> {
 
             // Sequencer
             KeyPress(Key::LeftBracket) => {
-                if self.seq_status != SeqStatus::Load {
-                    self.seq_status = SeqStatus::Load;
-                    self.sequence = Vec::default();
+                if self.seq_status != SeqStatus::Rec {
+                    self.seq_status = SeqStatus::Rec;
+                    self.seq_notes = Vec::default();
                 }
             }
             KeyPress(Key::RightBracket) => { 
                 self.seq_status = match self.seq_status {
-                    SeqStatus::Load => SeqStatus::Play,
+                    SeqStatus::Rec => SeqStatus::Play,
                     SeqStatus::Play => SeqStatus::Stop,
                     SeqStatus::Stop => SeqStatus::Play,
                 }
@@ -226,7 +230,7 @@ impl<'a> Synth<'a> {
         println!("[ F5-F6 ]   Timbre: {}", (10. * self.patch.timbre).round() / 10.);
         println!("[ F7-F8 ]    Morph: {}", (10. * self.patch.morph).round() / 10.);
         println!("[ F9-10 ]    Decay: {}", (10. * self.patch.decay).round() / 10.);
-        println!("                         [ '? Load ] [ ¡¿ {:?} ] [ Up/Down: Tempo ]", 
+        println!("                          [ '? Rec ] [ ¡¿ {:?} ] [ Up/Down: Tempo ]", 
             if self.seq_status != SeqStatus::Play {SeqStatus::Play} else {SeqStatus::Stop}
         );
         println!("+-----------------------------------------------------------------+    Octave  ");
@@ -240,8 +244,47 @@ impl<'a> Synth<'a> {
         println!("");
         println!("(Press [Esc] to exit)");
     }
+}
 
-    
+
+fn sequencer (arc_synth: Arc<Mutex<Synth>>) {
+    loop {
+        let is_playing = { 
+            let synth = arc_synth.lock().unwrap();
+            synth.seq_status == SeqStatus::Play && !synth.seq_notes.is_empty()
+        };
+        if is_playing {
+            let seq_notes = {  arc_synth.lock().unwrap().seq_notes.to_owned() };
+            'play_loop: loop {
+                for note in seq_notes.iter() {    
+                    let (sec_gate_on, sec_gate_off) = { 
+                        let synth = arc_synth.lock().unwrap();
+                        let sec_per_8th = 30. / synth.tempo;
+                        let sec_gate_on = sec_per_8th * synth.gate_length;
+                        let sec_gate_off = sec_per_8th - sec_gate_on;
+                        (sec_gate_on, sec_gate_off)
+                    };
+                    {
+                        let mut synth = arc_synth.lock().unwrap();
+                        if synth.seq_status != SeqStatus::Play {
+                            break 'play_loop;
+                        }
+                        synth.patch.note = *note;
+                        synth.modulations.trigger = 1.;
+                        synth.modulations.level = 1.;
+                    }
+                    thread::sleep(Duration::from_secs_f64(sec_gate_on));
+                    {
+                        let mut synth = arc_synth.lock().unwrap();
+                        synth.modulations.trigger = 0.;
+                        synth.modulations.level = 0.;                    
+                    }
+                    thread::sleep(Duration::from_secs_f64(sec_gate_off));
+                }
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 lazy_static! {
