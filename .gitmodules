@@ -1,0 +1,6 @@
+[submodule "mi-plaits-dsp-rs"]
+	path = mi-plaits-dsp-rs
+	url = https://github.com/xerydian/mi-plaits-dsp-rs
+[submodule "rdev"]
+	path = rdev
+	url = https://github.com/xerydian/rdev

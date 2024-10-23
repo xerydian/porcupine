@@ -3,22 +3,6 @@
 version = 3
 
 [[package]]
-name = "Porcupine"
-version = "0.1.0"
-dependencies = [
- "clearscreen",
- "lazy_static",
- "linked_hash_set",
- "memoize",
- "mi-plaits-dsp",
- "num",
- "rdev",
- "spin_sleep",
- "tinyaudio",
- "winapi",
-]
-
-[[package]]
 name = "aaudio"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -465,7 +449,6 @@ dependencies = [
 [[package]]
 name = "mi-plaits-dsp"
 version = "0.1.0"
-source = "git+https://github.com/xerydian/mi-plaits-dsp-rs#8331c14eff5e070674317f19a027a5843176dccf"
 dependencies = [
  "num-traits",
 ]
@@ -632,6 +615,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
 
 [[package]]
+name = "porcupine"
+version = "0.1.0"
+dependencies = [
+ "clearscreen",
+ "lazy_static",
+ "linked_hash_set",
+ "memoize",
+ "mi-plaits-dsp",
+ "num",
+ "rdev",
+ "spin_sleep",
+ "tinyaudio",
+ "winapi",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -667,7 +666,6 @@ checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 [[package]]
 name = "rdev"
 version = "0.5.3"
-source = "git+https://github.com/xerydian/rdev#5b8d4127e6c9c08553d0188bf812343ae06b19a1"
 dependencies = [
  "cocoa",
  "core-foundation 0.7.0",
