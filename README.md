@@ -6,8 +6,8 @@ Based on the Mutable Instruments Plaits synth engine.
 
 Originally written with a QWERTY keyboard in mind, will support universal keyboard layouts.
 
-[!NOTE]  
-It's still very much a toy project in its intial stage, i just wanted an excuse to write something in Rust.
+> [!NOTE]
+> It's still very much a toy project in its intial stage, i just wanted an excuse to write something in Rust.
 
 ### Progress
 
