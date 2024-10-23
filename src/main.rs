@@ -21,7 +21,7 @@ fn main() {
 
     let synth_1 = synth.clone();
     let _sequencer = thread::spawn(move || {
-        Synth::sequencer(synth_1);
+        Synth::sequencer_loop(synth_1);
     });
 
     let synth_2 = synth.clone();

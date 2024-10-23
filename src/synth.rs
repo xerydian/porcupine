@@ -1,11 +1,12 @@
 use crate::audio_shell::AudioGenerator;
 use mi_plaits_dsp::dsp::voice::{Modulations, Patch, Voice};
 
-use std::{cmp, vec};
+use std::vec;
 use std::collections::HashMap;
 use linked_hash_set::LinkedHashSet;
 use lazy_static::lazy_static;
 
+use std::mem::transmute;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use spin_sleep;
@@ -13,24 +14,27 @@ use spin_sleep;
 use rdev::{Event, Key};
 use rdev::EventType::{KeyPress, KeyRelease};
 
+use num::{Float, Num, NumCast, ToPrimitive};
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum SeqStatus {
     Recording, Play, Stop
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct SeqStep {
     note: Option<f32>,
     model: Option<usize>,
     harmonic: Option<f32>,
     timbre: Option<f32>,
     morph: Option<f32>,
+    decay: Option<f32>,
     gate_length: Option<f64>,
     is_awaiting_note: bool
 }
 
-pub enum SeqStepParam  {
-    Note, Rest, Model, Harmonic, Timbre, Morph, GateLength
+pub enum Param  {
+    Note, Rest, Model, Harmonic, Timbre, Morph, Decay, GateLength
 }
 
 const BEND_NEUTRAL : f32 = 0.;
@@ -72,6 +76,7 @@ pub struct Synth<'a> {
     pressed_set: LinkedHashSet<Key>,
     pub seq_notes: Vec<SeqStep>,
     pub seq_status: SeqStatus,
+    first_step_backup: SeqStep,
 }
 
 impl<'a> Synth<'a> {
@@ -98,6 +103,8 @@ impl<'a> Synth<'a> {
             pressed_set: LinkedHashSet::default(),
             seq_notes: Vec::default(),
             seq_status: SeqStatus::Stop,
+
+            first_step_backup: SeqStep::default(), 
         }
     }
 
@@ -128,6 +135,8 @@ impl<'a> Synth<'a> {
         println!("(Press [Esc] to exit)");
         // println!("")
         // println!("(debug) Rec Transpose: {}", self.rec_transpose);
+        
+        println!("{:#?}", self.seq_notes);
     }
 
     pub fn print_sequence (&self) {
@@ -142,9 +151,11 @@ impl<'a> Synth<'a> {
             if i % 8 == 0 { print!("["); }
             match sq {
                 SeqStep { is_awaiting_note: true, ..  } => print!("   MOD  "),
-                SeqStep { note: None, harmonic: None, timbre: None, morph: None, gate_length: None, .. } => print!(" (     )"),
+                SeqStep { note: None, model: None, harmonic: None, timbre: None, morph: None, gate_length: None, decay: None, .. } 
+                    => print!(" (     )"),
                 SeqStep { note: None, .. } => print!(" ( MOD )"),
-                SeqStep { note: Some(note), harmonic: None, timbre: None, morph: None, gate_length: None, .. } => print!(" ({:>+0width$.prec$})", note, width=5, prec=1),
+                SeqStep { note: Some(note), model: None, harmonic: None, timbre: None, morph: None, gate_length: None, decay: None, .. } 
+                    => print!(" ({:>+0width$.prec$})", note, width=5, prec=1),
                 SeqStep { note: Some(note), .. } => print!(" MOD({:>+0width$.prec$})", note, width=5, prec=1),
             };
             if i % 8 == 7 || (i+1) == self.seq_notes.len() { println!(" ]"); }
@@ -152,7 +163,7 @@ impl<'a> Synth<'a> {
         println!("");
     }
 
-    pub fn sequencer (arc_synth: Arc<Mutex<Synth>>) {
+    pub fn sequencer_loop (arc_synth: Arc<Mutex<Synth>>) {
         loop {
             let is_playing = { 
                 let synth = arc_synth.lock().unwrap();
@@ -194,6 +205,9 @@ impl<'a> Synth<'a> {
                                 synth.smooth_morph = morph;
                                 synth.target_morph = morph;
                             }
+                            if let Some(decay) = step.decay { 
+                                synth.patch.decay = decay;
+                            }
                         }
                         spin_sleep::sleep(Duration::from_secs_f64(sec_gate_on) - delta.elapsed()); 
                         let delta = Instant::now();
@@ -231,27 +245,59 @@ impl<'a> Synth<'a> {
         }
     }
 
-    fn record_step (&mut self, param: SeqStepParam, value: f32) -> () {
-        if self.seq_status != SeqStatus::Recording {
-            return;
+    fn update_first_step (&mut self, param: &Param) {
+        if self.seq_notes.is_empty() {
+            self.first_step_backup = SeqStep {
+                model: Some(self.patch.engine),
+                harmonic: Some(self.target_harmonic),
+                timbre: Some(self.target_timbre),
+                morph: Some(self.target_morph),
+                decay: Some(self.patch.decay),
+                gate_length: Some(self.gate_length),
+                ..Default::default()
+            }
         }
+        if self.seq_notes.len() > 1 {
+            let first_step = self.seq_notes.first_mut().unwrap();
+            match param {
+                Param::Model => recover_param(&mut first_step.model, self.first_step_backup.model),
+                Param::Harmonic => recover_param(&mut first_step.harmonic, self.first_step_backup.harmonic),
+                Param::Timbre => recover_param(&mut first_step.timbre, self.first_step_backup.timbre),
+                Param::Morph => recover_param(&mut first_step.morph, self.first_step_backup.morph),
+                Param::Decay => recover_param(&mut first_step.decay, self.first_step_backup.decay),
+                Param::GateLength => recover_param(&mut first_step.gate_length, self.first_step_backup.gate_length),
+                _ => (),
+            };
+        }
+    }
+    fn record_step<T: ToPrimitive + NumCast> (&mut self, param: Param, value: T) -> () {
         if self.seq_notes.is_empty() || !(self.seq_notes.last().unwrap().is_awaiting_note) { 
             self.seq_notes.push(SeqStep::default());
-        }       
-        let step = self.seq_notes.last_mut().unwrap();
+        }
+        let last_step = self.seq_notes.last_mut().unwrap();
+        let value = NumCast::from(value).unwrap();
         match param {
-            SeqStepParam::Rest => step.note = None,
-            SeqStepParam::Note => step.note = Some(value),
-            SeqStepParam::Model => step.model = Some(value as usize),
-            SeqStepParam::Harmonic => step.harmonic = Some(value),
-            SeqStepParam::Timbre => step.timbre = Some(value),
-            SeqStepParam::Morph => step.morph = Some(value),
-            SeqStepParam::GateLength => step.gate_length = Some(value as f64),
+            Param::Rest => last_step.note = None,
+            Param::Note => last_step.note = Some(value),
+            Param::Model => last_step.model = Some(NumCast::from(value).unwrap()),
+            Param::Harmonic => last_step.harmonic = Some(value),
+            Param::Timbre => last_step.timbre = Some(value),
+            Param::Morph => last_step.morph = Some(value),
+            Param::Decay => last_step.decay = Some(value),
+            Param::GateLength => last_step.gate_length = Some(NumCast::from(value).unwrap()),
         };
         match param {
-            SeqStepParam::Rest | SeqStepParam::Note => step.is_awaiting_note = false,
-            _ => step.is_awaiting_note = true,
+            Param::Rest | Param::Note => last_step.is_awaiting_note = false,
+            _ => last_step.is_awaiting_note = true,
         }
+    }
+
+    fn recording_wrapper<T> (&mut self, param: Param, value: &mut T, update: impl FnOnce(&mut T) -> ()) 
+    where T: Num + ToPrimitive + NumCast + Copy {
+        let is_recording = self.seq_status == SeqStatus::Recording;
+        if is_recording { self.update_first_step(&param);}
+        update(value);
+        if is_recording { self.record_step(param, *value);}
     }
 }
 
@@ -282,16 +328,24 @@ impl<'a> AudioGenerator for Synth<'a> {
         samples_left.clone_from_slice(&out);
         samples_right.clone_from_slice(&out);
     }
-
+    
     fn process_events(&mut self, event: Event) {
+        let note_ptr: &mut f32 = unsafe { transmute(&mut self.note) };
+        let rec_transpose = self.rec_transpose;
+        let engine_ptr: &mut usize = unsafe { transmute(&mut self.patch.engine) };
+        let harmonic_ptr: &mut f32 = unsafe { transmute(&mut self.target_harmonic) };
+        let timbre_ptr: &mut f32 = unsafe { transmute(&mut self.target_timbre) };
+        let morph_ptr: &mut f32 = unsafe { transmute(&mut self.target_morph) };
+        let decay_ptr: &mut f32 = unsafe { transmute(&mut self.patch.decay) };
+        let gate_length_ptr: &mut f64 = unsafe { transmute(&mut self.gate_length) };
+
         match event.event_type {
             KeyPress(key) if notes.contains_key(&key) => {
-                let note = *notes.get(&key).unwrap();
-                self.note = note;
+                let note = *notes.get(&key).unwrap() + rec_transpose;
+                self.recording_wrapper(Param::Note, note_ptr, |n: &mut f32| *n = note);
                 self.modulations.trigger = 1.0;
                 self.modulations.level = 1.0;
                 self.pressed_set.insert(key);
-                self.record_step(SeqStepParam::Note, note + self.rec_transpose);
             }
             // Handle note release
             KeyRelease(key) if notes.contains_key(&key) => {
@@ -307,52 +361,28 @@ impl<'a> AudioGenerator for Synth<'a> {
             KeyPress(Key::Escape) => std::process::exit(0),
 
             // Model
-            KeyPress(Key::F1) => {
-                self.patch.engine = if self.patch.engine > 1 {self.patch.engine - 1} else {0};
-                self.record_step(SeqStepParam::Model, self.patch.engine as f32);
-            }
-            KeyPress(Key::F2) => {
-                self.patch.engine = cmp::min(self.patch.engine + 1, 23);
-                self.record_step(SeqStepParam::Model, self.patch.engine as f32);
-            }
+            KeyPress(Key::F1) => self.recording_wrapper (Param::Model, engine_ptr, dec_usize),
+            KeyPress(Key::F2) => self.recording_wrapper (Param::Model, engine_ptr, inc_usize),
 
             // Harmonics
-            KeyPress(Key::F3) => {
-                self.target_harmonic = (self.target_harmonic - 0.1).max(0.);
-                self.record_step(SeqStepParam::Harmonic, self.target_harmonic);
-            }
-            KeyPress(Key::F4) => {
-                self.target_harmonic = (self.target_harmonic + 0.1).min(1.);
-                self.record_step(SeqStepParam::Harmonic, self.target_harmonic);
-            }
+            KeyPress(Key::F3) => self.recording_wrapper (Param::Harmonic, harmonic_ptr, dec_f32),
+            KeyPress(Key::F4) => self.recording_wrapper (Param::Harmonic, harmonic_ptr, inc_f32),
             
             // Timbre
-            KeyPress(Key::F5) => {
-                self.target_timbre = (self.target_timbre - 0.1).max(0.);
-                self.record_step(SeqStepParam::Timbre, self.target_timbre);
-            }
-            KeyPress(Key::F6) => {
-                self.target_timbre = (self.target_timbre + 0.1).min(1.);
-                self.record_step(SeqStepParam::Timbre, self.target_timbre);
-            }
+            KeyPress(Key::F5) => self.recording_wrapper (Param::Timbre, timbre_ptr, dec_f32),
+            KeyPress(Key::F6) => self.recording_wrapper (Param::Timbre, timbre_ptr, inc_f32),
 
             // Morph
-            KeyPress(Key::F7) => {
-                self.target_morph = (self.target_morph - 0.1).max(0.);
-                self.record_step(SeqStepParam::Morph, self.target_morph);
-            }
-            KeyPress(Key::F8) => {
-                self.target_morph = (self.target_morph + 0.1).min(1.);
-                self.record_step(SeqStepParam::Morph, self.target_morph);
-            }
+            KeyPress(Key::F7) => self.recording_wrapper (Param::Morph, morph_ptr, dec_f32),
+            KeyPress(Key::F8) => self.recording_wrapper (Param::Morph, morph_ptr, inc_f32),
 
             // Decay
-            KeyPress(Key::F9)  => {
-                self.patch.decay = (self.patch.decay - 0.1).max(0.);
-            }
-            KeyPress(Key::F10) => {
-                self.patch.decay = (self.patch.decay + 0.1).min(1.);
-            }
+            KeyPress(Key::F9)  => self.recording_wrapper (Param::Decay, decay_ptr, dec_f32),
+            KeyPress(Key::F10) => self.recording_wrapper (Param::Decay, decay_ptr, inc_f32),
+
+            // Gate Length
+            KeyPress(Key::LeftArrow) => self.recording_wrapper (Param::GateLength, gate_length_ptr, dec_f64),
+            KeyPress(Key::RightArrow) => self.recording_wrapper (Param::GateLength, gate_length_ptr, inc_f64),
             
             // Transpose
             KeyPress(Key::Dot) => { 
@@ -378,7 +408,7 @@ impl<'a> AudioGenerator for Synth<'a> {
             // Sequencer
             KeyPress(Key::LeftBracket) => {
                 self.rec_transpose = 0.;
-                self.record_step(SeqStepParam::Rest, 0.);
+                self.recording_wrapper(Param::Rest, note_ptr, |_| ());
             }
             KeyPress(Key::RightBracket) => {
                 self.rec_transpose = 0.;
@@ -398,16 +428,6 @@ impl<'a> AudioGenerator for Synth<'a> {
                     SeqStatus::Play => SeqStatus::Stop,
                     SeqStatus::Stop => SeqStatus::Play,
                 }
-            }
-
-            // Gate Length
-            KeyPress(Key::LeftArrow) => {
-                self.gate_length = (self.gate_length - 0.1).max(0.1);
-                self.record_step(SeqStepParam::GateLength, self.gate_length as f32);
-            }
-            KeyPress(Key::RightArrow) => {
-                self.gate_length = (self.gate_length + 0.1).min(1.);
-                self.record_step(SeqStepParam::GateLength, self.gate_length as f32);
             }
 
             // Tempo
@@ -473,3 +493,16 @@ lazy_static! {
         .collect::<Vec<(Key, f32)>>()).unwrap()
     );
 }
+
+fn recover_param<T> (parameter: &mut Option<T>, back_up: Option<T>) {
+    if parameter.is_none() {
+        *parameter = back_up;
+    }
+}
+
+fn dec_usize (value: &mut usize) { *value = (*value - 1).max(0); }
+fn inc_usize (value: &mut usize) { *value = (*value + 1).min(23); }
+fn dec_f32 (value: &mut f32) { *value = (*value - 0.1).max(0.); }
+fn inc_f32 (value: &mut f32) { *value = (*value + 0.1).min(1.); }
+fn dec_f64 (value: &mut f64) { *value = (*value - 0.1).max(0.); }
+fn inc_f64 (value: &mut f64) { *value = (*value + 0.1).min(1.); }
