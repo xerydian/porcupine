@@ -4,15 +4,16 @@
 // Reference: https://github.com/Narsil/rdev/blob/main/examples/listen.rs
 
 
-use std::{array, sync::{Arc, LazyLock, Mutex}, thread};
+use std::{array, sync::{Arc, LazyLock, Mutex}};
 
 mod audio_shell;
 mod keyboard_utils;
 mod synth;
 mod ui;
 
-use synth::part::Synth;
+use crate::synth::seq::{SeqStatus, Sequencer};
 use crate::ui::text::{print_info, process_keyboard_events};
+use synth::part::Synth;
 use tinyaudio::{run_output_device, OutputDeviceParameters};
 
 const SAMPLE_RATE: u32 = 48000;
@@ -43,21 +44,32 @@ fn main() {
         }
     }).unwrap();
 
-    for synth in VOICES.iter() {       
-        synth.lock().unwrap().init(); 
+    let seq: Arc<Mutex<Sequencer>> = Arc::new(
+        Sequencer {
+            tempo: 120.,
+            status: SeqStatus::Stop,
+        }.into());
 
+    for synth in VOICES.iter() {
+        { synth.lock().unwrap().init();  }
+        /*
         let synth_1 = synth.clone();
+        let seq_1 = seq.clone();
         thread::spawn(move || {
-            Synth::sequencer_loop(synth_1);
+            Synth::sequencer_loop(synth_1, seq_1);
         });
 
         let synth_2 = synth.clone();
+        let seq_2 = seq.clone();
         thread::spawn(move || {
             Synth::control_loop(synth_2);
-        });
+        }); */
     }
-    print_info();
-    let _ = rdev::listen(process_keyboard_events); // handle keystrokes, blocking
+    
+    
+    print_info(&seq.lock().unwrap(), &VOICES.first().unwrap().lock().unwrap());
+    
+    let _ = rdev::listen(process_keyboard_events(seq)); // handle keystrokes, blocking
 }
 
 
@@ -70,7 +82,6 @@ fn output_sound(samples_l: &mut [f32], samples_r: &mut [f32]) {
         let out_i = out.get_mut(i).unwrap();
         let aux_i = aux.get_mut(i).unwrap();
         synth.lock().unwrap().render(out_i, aux_i);
-        synth.clear_poison();
     }
 
     for (i, synth) in VOICES.iter().enumerate() {

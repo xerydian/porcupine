@@ -1,4 +1,4 @@
-use std::sync::{LazyLock, Mutex, Condvar};
+use std::sync::{Condvar, LazyLock, Mutex, MutexGuard};
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,12 +25,12 @@ pub struct Sequencer {
 }
 
 impl Sequencer {
-    pub fn tempo_up (&mut self) {
-        self.tempo += 4.0;
+    pub fn tempo_up (seq: &mut MutexGuard<Sequencer>) {
+        seq.tempo += 4.0;
     }
     
-    pub fn tempo_down (&mut self) {
-        self.tempo -= 4.0;
+    pub fn tempo_down (seq: &mut MutexGuard<Sequencer>) {
+        seq.tempo -= 4.0;
     }
 
     pub fn start_recording (&mut self) {
@@ -49,11 +49,6 @@ impl Sequencer {
     pub fn is_stopped(&self) -> bool { self.status == SeqStatus::Stop }
 
 }
-
-pub static SEQUENCER: LazyLock<Mutex<Sequencer>> = LazyLock::new(|| Sequencer {
-    tempo: 120.,
-    status: SeqStatus::Stop,
-}.into());
 
 pub struct Transport {
     pub is_playing: Mutex<bool>,

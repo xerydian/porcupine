@@ -1,19 +1,17 @@
 use crate::audio_shell::AudioGenerator;
 use mi_plaits_dsp::dsp::voice::{Modulations, Patch, Voice};
 
-use std::vec;
 use linked_hash_set::LinkedHashSet;
+use std::vec;
 
-use std::mem::transmute;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use spin_sleep;
+use std::mem::transmute;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use num::{Num, NumCast, ToPrimitive};
-use crate::synth::seq::{SeqStatus, SeqStep, TRANSPORT};
+use crate::synth::seq::{SeqStatus, SeqStep, Sequencer, TRANSPORT};
 use crate::synth::util::*;
-
-use super::seq::SEQUENCER;
+use num::{Num, NumCast, ToPrimitive};
 
 pub enum Param  {
     Note, Rest, Model, Harmonic, Timbre, Morph, Decay, GateLength
@@ -101,7 +99,7 @@ impl<'a> Synth<'a> {
         self.synth_engine.init();
     }
 
-    pub fn sequencer_loop (arc_synth: Arc<Mutex<Synth>>) {
+    pub fn sequencer_loop (arc_synth: Arc<Mutex<Synth>>, arc_seq: Arc<Mutex<Sequencer>>) {
         loop {
             println!("debug sequencer!!!");
             let is_playing = TRANSPORT.condvar.wait(
@@ -122,7 +120,7 @@ impl<'a> Synth<'a> {
                         };
                         {
                             let mut synth = arc_synth.lock().unwrap();
-                            if SEQUENCER.lock().unwrap().is_stopped() {
+                            if arc_seq.lock().unwrap().is_stopped() {
                                 break 'play_loop;
                             }
                             if let Some(note) = step.note {
@@ -345,8 +343,7 @@ impl<'a> Synth<'a> {
         self.info_octave   -= 1;
     }
 
-    pub fn start_recording_or_undo_last (&mut self) {
-        let mut seq = SEQUENCER.lock().unwrap();
+    pub fn start_recording_or_undo_last (&mut self, seq: &mut MutexGuard<Sequencer>) {
         self.rec_transpose = 0.;
         if seq.is_recording() {
             self.seq_notes.pop();

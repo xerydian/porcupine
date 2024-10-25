@@ -1,7 +1,7 @@
 use crate::keyboard_utils::{ch, VK_Comma, VK_LeftBracket, VK_RightBracket, VK_B, VK_C, VK_D, VK_E, VK_F, VK_G, VK_H, VK_I, VK_J, VK_K, VK_M, VK_N, VK_O, VK_R, VK_S, VK_T, VK_U, VK_V, VK_W, VK_X, VK_Y, VK_Z};
 
 use std::collections::HashMap;
-use std::sync::{MutexGuard, LazyLock};
+use std::sync::{MutexGuard, LazyLock, Arc, Mutex};
 use crate::synth::part::Synth;
 use crate::synth::seq::*;
 use crate::{VOICES, SELECTED_VOICE};
@@ -14,10 +14,8 @@ pub static KEY_NOTES: LazyLock<HashMap<Key, i32>> = LazyLock::new(|| HashMap::fr
     (Key::KeyZ,00), (Key::KeyX,03), (Key::KeyC,06), (Key::KeyV,09), (Key::KeyB,12), (Key::KeyN,15), (Key::KeyM,18), (Key::Comma,21), 
 ]));
 
-pub fn print_info () {
-    let  seq = SEQUENCER.lock().unwrap();
-    let synth = VOICES.get(SELECTED_VOICE).unwrap().lock().unwrap();
-    // clearscreen::clear().unwrap();
+pub fn print_info (seq: &MutexGuard<Sequencer>, synth: &MutexGuard<Synth>) {
+    clearscreen::clear().unwrap();
     println!("[ F1-F2 ]    Model: {}", ENGINE_DESCRIPIONS[synth.patch.engine]);
     println!("[ F3-F4 ] Harmonic: {}", (10. * synth.target_harmonic).round() / 10.);
     println!("[ F5-F6 ]   Timbre: {}", (10. * synth.target_timbre).round() / 10.);
@@ -72,67 +70,66 @@ pub fn print_sequence (synth: &MutexGuard<Synth>, seq: &MutexGuard<Sequencer>) {
     }
 }
 
-pub fn process_keyboard_events(event: Event) {
-    match event.event_type {
-        KeyPress(_) | KeyRelease(_) => (),
-        _ => return
-    }
+pub fn process_keyboard_events(seq: Arc<Mutex<Sequencer>>) -> impl Fn(Event) {
+    move |event: Event| {
+        match event.event_type {
+            KeyPress(_) | KeyRelease(_) => (),
+            _ => return
+        }
 
-    println!("test");
+        let mut seq = seq.lock().unwrap();
+        let mut synth = VOICES.get(SELECTED_VOICE).unwrap().lock().unwrap();
 
-    let mut seq = SEQUENCER.lock().unwrap();
-    let mut synth = VOICES.get(SELECTED_VOICE).unwrap().lock().unwrap();
-
-    match event.event_type {
-        KeyPress(key) if KEY_NOTES.contains_key(&key) 
+        match event.event_type {
+            KeyPress(key) if KEY_NOTES.contains_key(&key)
             => synth.note_on(*KEY_NOTES.get(&key).unwrap()),
-        KeyRelease(key) if KEY_NOTES.contains_key(&key) 
+            KeyRelease(key) if KEY_NOTES.contains_key(&key)
             => synth.note_off(*KEY_NOTES.get(&key).unwrap()),
 
-        KeyPress(Key::F1) => synth.model_down(),
-        KeyPress(Key::F2) => synth.model_up(),
-        KeyPress(Key::F3) => synth.harmonic_down(),
-        KeyPress(Key::F4) => synth.harmonic_up(),
-        KeyPress(Key::F5) => synth.timbre_down(),
-        KeyPress(Key::F6) => synth.timbre_up(),
-        KeyPress(Key::F7) => synth.morph_down(),
-        KeyPress(Key::F8) => synth.morph_up(),
-        KeyPress(Key::F9) => synth.decay_down(),
-        KeyPress(Key::F10) => synth.decay_up(),
-        KeyPress(Key::ShiftLeft)     => synth.pitch_bend_negative(),
-        KeyPress(Key::IntlBackslash) => synth.pitch_bend_positive(),
-        KeyRelease(Key::ShiftLeft | Key::IntlBackslash) => synth.pitch_bend_neutral(),
-        KeyPress(Key::ControlLeft)   => synth.vibrato_on(),
-        KeyRelease(Key::ControlLeft) => synth.vibrato_off(),
-        KeyPress(Key::LeftArrow) => synth.gate_length_down(),
-        KeyPress(Key::RightArrow) => synth.gate_length_up(),
-        KeyPress(Key::Dot) => synth.transpose_down(),
-        KeyPress(Key::Minus) => synth.transpose_up(),
-        KeyPress(Key::LeftBracket) => synth.add_rest(),
-        KeyPress(Key::RightBracket) => synth.start_recording_or_undo_last(),
-        KeyPress(Key::Backspace) => synth.clear_notes(),
-        KeyPress(Key::Space) => seq.play_pause(),
-        KeyPress(Key::DownArrow) => seq.tempo_down(),
-        KeyPress(Key::UpArrow) => seq.tempo_up(),
-        // KeyPress(key) => println!("{:?}", key),
-        // Not implemented: self.balance, self.volume, self.patch.lpg_colour
-        _ => {}
+            KeyPress(Key::F1) => synth.model_down(),
+            KeyPress(Key::F2) => synth.model_up(),
+            KeyPress(Key::F3) => synth.harmonic_down(),
+            KeyPress(Key::F4) => synth.harmonic_up(),
+            KeyPress(Key::F5) => synth.timbre_down(),
+            KeyPress(Key::F6) => synth.timbre_up(),
+            KeyPress(Key::F7) => synth.morph_down(),
+            KeyPress(Key::F8) => synth.morph_up(),
+            KeyPress(Key::F9) => synth.decay_down(),
+            KeyPress(Key::F10) => synth.decay_up(),
+            KeyPress(Key::ShiftLeft) => synth.pitch_bend_negative(),
+            KeyPress(Key::IntlBackslash) => synth.pitch_bend_positive(),
+            KeyRelease(Key::ShiftLeft | Key::IntlBackslash) => synth.pitch_bend_neutral(),
+            KeyPress(Key::ControlLeft) => synth.vibrato_on(),
+            KeyRelease(Key::ControlLeft) => synth.vibrato_off(),
+            KeyPress(Key::LeftArrow) => synth.gate_length_down(),
+            KeyPress(Key::RightArrow) => synth.gate_length_up(),
+            KeyPress(Key::Dot) => synth.transpose_down(),
+            KeyPress(Key::Minus) => synth.transpose_up(),
+            KeyPress(Key::LeftBracket) => synth.add_rest(),
+            KeyPress(Key::RightBracket) => synth.start_recording_or_undo_last(&mut seq),
+            KeyPress(Key::Backspace) => synth.clear_notes(),
+            KeyPress(Key::Space) => seq.play_pause(),
+            KeyPress(Key::DownArrow) => Sequencer::tempo_down(&mut seq),
+            KeyPress(Key::UpArrow) => Sequencer::tempo_up(&mut seq),
+            // KeyPress(key) => println!("{:?}", key),
+            // Not implemented: self.balance, self.volume, self.patch.lpg_colour
+            _ => {}
+        }
+        // Print Info
+        match event.event_type {
+            KeyPress(
+                Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 |
+                Key::Space | Key::RightBracket | Key::UpArrow | Key::DownArrow | Key::Dot | Key::Minus | Key::LeftArrow | Key::RightArrow
+            ) => {
+                print_info(&seq, &synth);
+            },
+            KeyPress(key) if KEY_NOTES.contains_key(&key) && seq.is_recording() => print_info(&seq, &synth),
+            KeyPress(Key::LeftBracket | Key::Backspace) if seq.is_recording() => print_info(&seq, &synth),
+            KeyPress(Key::Escape) => std::process::exit(0),
+            _ => ()
+        }
     }
-
-    // Print Info
-    match event.event_type {
-        KeyPress(
-            Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 |
-            Key::Space | Key::RightBracket | Key::UpArrow | Key::DownArrow | Key::Dot | Key::Minus | Key::LeftArrow | Key::RightArrow
-        ) => {
-            print_info();
-        },
-        KeyPress(key) if KEY_NOTES.contains_key(&key) && seq.is_recording() => print_info(),
-        KeyPress(Key::LeftBracket | Key::Backspace) if seq.is_recording() => print_info(),
-        KeyPress(Key::Escape) => std::process::exit(0),
-        _ => ()
-    }
-} 
+}
 
 const ENGINE_DESCRIPIONS: [&str; 24] = [
     "Virtual analog VCF (01)",
