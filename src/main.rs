@@ -4,7 +4,7 @@
 // Reference: https://github.com/Narsil/rdev/blob/main/examples/listen.rs
 
 
-use std::{array, sync::{Arc, LazyLock, Mutex}};
+use std::{array, sync::{Arc, LazyLock, Mutex}, thread};
 
 mod audio_shell;
 mod keyboard_utils;
@@ -52,7 +52,7 @@ fn main() {
 
     for synth in VOICES.iter() {
         { synth.lock().unwrap().init();  }
-        /*
+        
         let synth_1 = synth.clone();
         let seq_1 = seq.clone();
         thread::spawn(move || {
@@ -63,12 +63,12 @@ fn main() {
         let seq_2 = seq.clone();
         thread::spawn(move || {
             Synth::control_loop(synth_2);
-        }); */
+        });
     }
-    
-    
+
+
     print_info(&seq.lock().unwrap(), &VOICES.first().unwrap().lock().unwrap());
-    
+
     let _ = rdev::listen(process_keyboard_events(seq)); // handle keystrokes, blocking
 }
 
