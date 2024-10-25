@@ -1,6 +1,5 @@
 // Reference: https://github.com/sourcebox/audio-midi-shell-rs/blob/master/src/lib.rs 
 
-use rdev::Event;
 use tinyaudio::{run_output_device, OutputDevice, OutputDeviceParameters};
 use std::sync::{Arc, Mutex};
 use std::marker::PhantomData;
@@ -57,7 +56,4 @@ pub trait AudioGenerator {
     /// `samples_left` and `samples_right` are buffers of the block size passed to the shell `run`
     /// function. They are initialized to `0.0` and must be filled with sample data.
     fn output_sound(&mut self, samples_left: &mut [f32], samples_right: &mut [f32]);
-
-    /// Processes keyboard input.
-    fn process_events(&mut self, _event: Event) {}
 }

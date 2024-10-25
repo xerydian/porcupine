@@ -1,7 +1,7 @@
 extern crate winapi;
 
 // use std::ptr::null_mut;
-use winapi::um::winuser::{GetAsyncKeyState, GetKeyboardState, MapVirtualKeyW, ToUnicode, VK_ESCAPE, VK_RETURN};
+use winapi::um::winuser::{GetAsyncKeyState, GetKeyboardState, MapVirtualKeyW, ToUnicode, VK_RETURN};
 // use winapi::um::winuser::{KEYBDINPUT, INPUT, INPUT_KEYBOARD, SendInput};
 
 fn main() {

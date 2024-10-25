@@ -7,26 +7,20 @@
 use std::{array, sync::{Arc, LazyLock, Mutex}, thread};
 
 mod audio_shell;
-
-mod synth;
-use synth::{SeqStatus, SeqStep, Synth};
-use crate::gui::process_events;
-
 mod keyboard_utils;
+mod synth;
+mod ui;
 
+use synth::part::Synth;
+use crate::ui::text::{print_info, process_keyboard_events};
+use tinyaudio::{run_output_device, OutputDeviceParameters};
 
 const SAMPLE_RATE: u32 = 48000;
 const BLOCK_SIZE: usize = 2048;
 const MAX_VOICE_COUNT: usize = 4;
 
-use tinyaudio::{run_output_device, OutputDeviceParameters};
-
-mod gui;
-
-static TEMPO: f32 = 120.;
-static SEQ_STATUS: SeqStatus = SeqStatus::Stop;
 static SELECTED_VOICE: usize = 0;
-pub static VOICES: LazyLock<[Arc<Mutex<Synth<'static>>>; MAX_VOICE_COUNT]> = std::sync::LazyLock::new(||
+pub static VOICES: LazyLock<[Arc<Mutex<Synth<'static>>>; MAX_VOICE_COUNT]> = LazyLock::new(||
     array::from_fn(|_| Arc::new(Mutex::new(Synth::new(BLOCK_SIZE))))
 );
 
@@ -51,6 +45,7 @@ fn main() {
 
     for synth in VOICES.iter() {       
         synth.lock().unwrap().init(); 
+
         let synth_1 = synth.clone();
         thread::spawn(move || {
             Synth::sequencer_loop(synth_1);
@@ -61,8 +56,8 @@ fn main() {
             Synth::control_loop(synth_2);
         });
     }
-
-    let _ = rdev::listen(process_events); // handle keystrokes, blocking
+    print_info();
+    let _ = rdev::listen(process_keyboard_events); // handle keystrokes, blocking
 }
 
 
@@ -81,10 +76,11 @@ fn output_sound(samples_l: &mut [f32], samples_r: &mut [f32]) {
     for (i, synth) in VOICES.iter().enumerate() {
         let v = synth.lock().unwrap();
         let out_i = out.get(i).unwrap().to_owned();
-        let aux_i = aux.get(i).unwrap().to_owned();
+        // let aux_i = aux.get(i).unwrap().to_owned();
         let (pan_r, pan_l) = equal_power_panlaw_r_l(v.pan);
         for frame in 0..BLOCK_SIZE {
-            let sample = (out_i[frame] * (1.0 - v.balance) + aux_i[frame] * v.balance) * v.volume;
+            // let sample = (out_i[frame] * (1.0 - v.balance) + aux_i[frame] * v.balance) * v.volume;
+            let sample = out_i[frame] * v.volume;
             samples_l[frame] += sample * pan_l;
             samples_r[frame] += sample * pan_r;
         }
